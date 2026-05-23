@@ -23,10 +23,7 @@ class DeepSeekApi {
     private val gson = Gson()
     private val baseUrl = "https://api.deepseek.com/v1/chat/completions"
 
-    private fun getApiKey(): String {
-        val userKey = ApiKeyStore.getApiKey()
-        return if (userKey.isNotBlank()) userKey else BuildConfig.DEEPSEEK_API_KEY
-    }
+    private fun getApiKey(): String = BuildConfig.DEEPSEEK_API_KEY
 
     suspend fun divine(method: FortuneMethod, profile: UserProfile, question: String? = null, extra: String? = null): String {
         return withContext(Dispatchers.IO) {

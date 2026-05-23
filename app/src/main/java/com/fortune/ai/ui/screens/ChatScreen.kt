@@ -16,12 +16,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fortune.ai.data.model.FortuneMethod
 import com.fortune.ai.data.model.FortuneResult
+import com.fortune.ai.data.remote.SupabaseClient
 import kotlinx.coroutines.launch
 
 data class ChatMessage(
     val content: String,
-    val isUser: Boolean,
-    val isLoading: Boolean = false
+    val isUser: Boolean
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -35,16 +35,35 @@ fun ChatScreen(
     BackHandler { onBack() }
 
     var inputText by remember { mutableStateOf("") }
-    var messages by remember {
-        mutableStateOf(
-            listOf(
-                ChatMessage("以下是${method.displayName}的解读结果：\n\n${initialResult.plainSummary}\n\n${initialResult.detail}", isUser = false)
-            )
-        )
-    }
+    var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var isWaiting by remember { mutableStateOf(false) }
+    var isLoading by remember { mutableStateOf(true) }
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        val history = try {
+            SupabaseClient.loadChatHistory(method)
+        } catch (_: Exception) { emptyList() }
+
+        if (history.isNotEmpty()) {
+            messages = history.map { ChatMessage(it.content, it.isUser) }
+        } else {
+            val initialMsg = buildString {
+                append("以下是${method.displayName}的解读结果：\n\n")
+                if (initialResult.plainSummary.isNotBlank()) {
+                    append(initialResult.plainSummary)
+                    append("\n\n")
+                }
+                append(initialResult.detail)
+            }
+            messages = listOf(ChatMessage(initialMsg, isUser = false))
+            try {
+                SupabaseClient.saveChatMessage(method, initialMsg, isUser = false)
+            } catch (_: Exception) {}
+        }
+        isLoading = false
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -56,19 +75,32 @@ fun ChatScreen(
             }
         )
 
-        // Messages list
-        LazyColumn(
-            modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
-            state = listState,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            items(messages) { message ->
-                ChatBubble(message)
+        if (isLoading) {
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                items(messages) { message ->
+                    ChatBubble(message)
+                }
+                if (isWaiting) {
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("大师思考中...", fontSize = 12.sp)
+                        }
+                    }
+                }
             }
         }
 
-        // Input bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -80,7 +112,7 @@ fun ChatScreen(
                 onValueChange = { inputText = it },
                 placeholder = { Text("继续追问...") },
                 modifier = Modifier.weight(1f),
-                enabled = !isWaiting,
+                enabled = !isWaiting && !isLoading,
                 singleLine = false,
                 maxLines = 3
             )
@@ -94,6 +126,10 @@ fun ChatScreen(
                         isWaiting = true
 
                         scope.launch {
+                            // Save user message first, await completion
+                            try {
+                                SupabaseClient.saveChatMessage(method, userMsg, isUser = true)
+                            } catch (_: Exception) {}
                             listState.animateScrollToItem(messages.size - 1)
                         }
 
@@ -101,12 +137,16 @@ fun ChatScreen(
                             messages = messages + ChatMessage(reply, isUser = false)
                             isWaiting = false
                             scope.launch {
+                                // Save AI reply, await completion
+                                try {
+                                    SupabaseClient.saveChatMessage(method, reply, isUser = false)
+                                } catch (_: Exception) {}
                                 listState.animateScrollToItem(messages.size - 1)
                             }
                         }
                     }
                 },
-                enabled = inputText.isNotBlank() && !isWaiting
+                enabled = inputText.isNotBlank() && !isWaiting && !isLoading
             ) {
                 Text("发送")
             }

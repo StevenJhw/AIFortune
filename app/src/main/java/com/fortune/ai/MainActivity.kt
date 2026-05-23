@@ -17,9 +17,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.fortune.ai.data.api.ApiKeyStore
 import com.fortune.ai.data.model.FortuneMethod
 import com.fortune.ai.data.model.FortuneResult
+import com.fortune.ai.data.model.UserProfile
 import com.fortune.ai.data.remote.SupabaseClient
 import com.fortune.ai.ui.screens.*
 import com.fortune.ai.ui.theme.AiFortuneTheme
@@ -27,7 +27,6 @@ import com.fortune.ai.ui.theme.AiFortuneTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ApiKeyStore.init(this)
         SupabaseClient.init(this)
         setContent {
             AiFortuneTheme {
@@ -49,6 +48,8 @@ fun AiFortuneApp(viewModel: MainViewModel = viewModel()) {
     var selectedResult by remember { mutableStateOf<FortuneResult?>(null) }
     var interactiveMethod by remember { mutableStateOf<FortuneMethod?>(null) }
     var interactiveResult by remember { mutableStateOf<String?>(null) }
+    var pendingProfile by remember { mutableStateOf<UserProfile?>(null) }
+    var showUpdateConfirm by remember { mutableStateOf(false) }
 
     // Load saved data on first launch
     LaunchedEffect(Unit) {
@@ -68,6 +69,32 @@ fun AiFortuneApp(viewModel: MainViewModel = viewModel()) {
             Screen.EditProfile -> Screen.Settings
             else -> Screen.Results
         }
+    }
+
+    // Confirm dialog when updating profile
+    if (showUpdateConfirm && pendingProfile != null) {
+        AlertDialog(
+            onDismissRequest = {
+                showUpdateConfirm = false
+                pendingProfile = null
+            },
+            title = { Text("修改基本信息") },
+            text = { Text("修改信息后将重新算命，之前的算命结果和问卦历史都会被清除。确定吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showUpdateConfirm = false
+                    viewModel.updateProfile(pendingProfile!!)
+                    pendingProfile = null
+                    currentScreen = Screen.Results
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showUpdateConfirm = false
+                    pendingProfile = null
+                }) { Text("取消") }
+            }
+        )
     }
 
     when (currentScreen) {
@@ -95,8 +122,8 @@ fun AiFortuneApp(viewModel: MainViewModel = viewModel()) {
             ProfileScreen(
                 existingProfile = profile,
                 onSubmit = { userProfile ->
-                    viewModel.updateProfile(userProfile)
-                    currentScreen = Screen.Settings
+                    pendingProfile = userProfile
+                    showUpdateConfirm = true
                 }
             )
         }

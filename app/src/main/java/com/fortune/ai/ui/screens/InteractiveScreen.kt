@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.sp
 import com.fortune.ai.data.remote.InteractiveHistoryRecord
 import com.fortune.ai.data.remote.SupabaseClient
 import com.fortune.ai.data.model.FortuneMethod
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
@@ -61,7 +62,17 @@ fun InteractiveScreen(
         )
 
         if (showHistory) {
-            HistoryList(history)
+            HistoryList(
+                history = history,
+                onDelete = { record ->
+                    scope.launch {
+                        try {
+                            SupabaseClient.deleteInteractiveRecord(record.id)
+                            history = history.filter { it.id != record.id }
+                        } catch (_: Exception) {}
+                    }
+                }
+            )
         } else {
             Column(
                 modifier = Modifier
@@ -98,12 +109,46 @@ fun InteractiveScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 if (!isSubmitted) {
+                    val extraReady = when (method) {
+                        FortuneMethod.TAROT -> extra.split("、").size >= 3
+                        FortuneMethod.LIUYAO -> extra.split("\n").size >= 6
+                        FortuneMethod.MEIHUA -> extra.isNotBlank() && extra.all { it.isDigit() }
+                        FortuneMethod.CEZI -> extra.isNotBlank()
+                        FortuneMethod.RUNES -> extra.isNotBlank()
+                        FortuneMethod.DICE -> extra.isNotBlank()
+                        FortuneMethod.PENDULUM -> true
+                        else -> true
+                    }
+
+                    val validationHint = when {
+                        question.isBlank() -> "请先输入问题"
+                        !extraReady -> when (method) {
+                            FortuneMethod.TAROT -> "请抽满3张牌"
+                            FortuneMethod.LIUYAO -> "请摇满6次卦"
+                            FortuneMethod.MEIHUA -> "请输入数字"
+                            FortuneMethod.CEZI -> "请输入一个字"
+                            FortuneMethod.RUNES -> "请抽取符文"
+                            FortuneMethod.DICE -> "请掷骰子"
+                            else -> ""
+                        }
+                        else -> null
+                    }
+
+                    if (validationHint != null) {
+                        Text(
+                            validationHint,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     Button(
                         onClick = {
                             isSubmitted = true
                             onSubmit(question, extra)
                         },
-                        enabled = question.isNotBlank(),
+                        enabled = question.isNotBlank() && extraReady,
                         modifier = Modifier.fillMaxWidth().height(48.dp)
                     ) {
                         Text("开始占卜")
@@ -142,6 +187,13 @@ fun InteractiveScreen(
                                 question = ""
                                 extra = ""
                                 onReset()
+                                // Reload history (small delay to let Supabase save complete)
+                                scope.launch {
+                                    kotlinx.coroutines.delay(500)
+                                    try {
+                                        history = SupabaseClient.loadInteractiveHistory(method)
+                                    } catch (_: Exception) {}
+                                }
                             },
                             modifier = Modifier.fillMaxWidth().height(48.dp)
                         ) {
@@ -155,7 +207,10 @@ fun InteractiveScreen(
 }
 
 @Composable
-private fun HistoryList(history: List<InteractiveHistoryRecord>) {
+private fun HistoryList(
+    history: List<InteractiveHistoryRecord>,
+    onDelete: (InteractiveHistoryRecord) -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -166,11 +221,20 @@ private fun HistoryList(history: List<InteractiveHistoryRecord>) {
         history.forEach { record ->
             Card {
                 Column(modifier = Modifier.padding(12.dp)) {
-                    Text(
-                        "问：${record.question}",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "问：${record.question}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = { onDelete(record) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Text("✕", fontSize = 16.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         record.result,
@@ -248,15 +312,23 @@ private fun LiuyaoInteraction(onResult: (String) -> Unit) {
 @Composable
 private fun MeihuaInteraction(onResult: (String) -> Unit) {
     var number by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
 
     Text("输入一个数字（随意）：", fontWeight = FontWeight.Bold)
     OutlinedTextField(
         value = number,
-        onValueChange = {
-            number = it
-            onResult(it)
+        onValueChange = { input ->
+            if (input.isEmpty() || input.all { it.isDigit() }) {
+                number = input
+                error = false
+                onResult(input)
+            } else {
+                error = true
+            }
         },
         label = { Text("数字") },
+        isError = error,
+        supportingText = if (error) {{ Text("只能输入数字") }} else null,
         modifier = Modifier.fillMaxWidth()
     )
 }
@@ -264,17 +336,29 @@ private fun MeihuaInteraction(onResult: (String) -> Unit) {
 @Composable
 private fun CeziInteraction(onResult: (String) -> Unit) {
     var character by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
 
     Text("写一个字：", fontWeight = FontWeight.Bold)
     OutlinedTextField(
         value = character,
-        onValueChange = {
-            if (it.length <= 1) {
-                character = it
-                onResult(it)
+        onValueChange = { input ->
+            if (input.isEmpty()) {
+                character = ""
+                error = null
+                onResult("")
+            } else if (input.length == 1 && input.first().code > 0x4E00) {
+                character = input
+                error = null
+                onResult(input)
+            } else if (input.length > 1) {
+                error = "只能输入一个字"
+            } else {
+                error = "请输入汉字"
             }
         },
         label = { Text("一个汉字") },
+        isError = error != null,
+        supportingText = error?.let { { Text(it) } },
         modifier = Modifier.fillMaxWidth()
     )
 }

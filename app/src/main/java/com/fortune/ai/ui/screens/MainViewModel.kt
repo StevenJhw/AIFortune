@@ -36,21 +36,6 @@ class MainViewModel : ViewModel() {
         _selectedTab.value = tab
     }
 
-    fun loadSavedData() {
-        viewModelScope.launch {
-            try {
-                val data = SupabaseClient.loadUserData()
-                if (data != null) {
-                    _profile.value = data.profile
-                    _results.value = data.results
-                    _overallSummary.value = data.summary
-                }
-            } catch (e: Exception) {
-                // Supabase unreachable, continue without data
-            }
-        }
-    }
-
     fun hasSavedData(onResult: (Boolean) -> Unit) {
         viewModelScope.launch {
             try {
@@ -63,7 +48,7 @@ class MainViewModel : ViewModel() {
                 } else {
                     onResult(false)
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 onResult(false)
             }
         }
@@ -71,16 +56,24 @@ class MainViewModel : ViewModel() {
 
     fun setProfile(profile: UserProfile) {
         _profile.value = profile
+        viewModelScope.launch {
+            try {
+                SupabaseClient.saveUserData(profile, emptyMap(), null)
+            } catch (_: Exception) {}
+        }
         startFullReading(profile)
     }
 
     fun updateProfile(profile: UserProfile) {
         _profile.value = profile
+        _overallSummary.value = null
         viewModelScope.launch {
             try {
-                SupabaseClient.saveUserData(profile, _results.value, _overallSummary.value)
+                SupabaseClient.deleteAllInteractiveHistory()
+                SupabaseClient.deleteAllChatHistory()
             } catch (_: Exception) {}
         }
+        startFullReading(profile)
     }
 
     fun reRunFullReading() {
@@ -118,7 +111,6 @@ class MainViewModel : ViewModel() {
 
             generateOverallSummary(profile)
 
-            // Save to Supabase
             try {
                 SupabaseClient.saveUserData(profile, _results.value, _overallSummary.value)
             } catch (_: Exception) {}
@@ -135,10 +127,12 @@ class MainViewModel : ViewModel() {
                 val summary = api.generateSummary(completedResults, profile)
                 _overallSummary.value = summary
 
-                // Update Supabase with summary
-                try {
-                    SupabaseClient.saveUserData(profile, _results.value, summary)
-                } catch (_: Exception) {}
+                val profile = _profile.value
+                if (profile != null) {
+                    try {
+                        SupabaseClient.saveUserData(profile, _results.value, summary)
+                    } catch (_: Exception) {}
+                }
             } catch (e: Exception) {
                 _overallSummary.value = "总结生成失败: ${e.message}"
             }
@@ -151,7 +145,6 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = api.divine(method, profile, question, extra)
-                // Save to Supabase
                 try {
                     SupabaseClient.saveInteractiveRecord(method, question, result)
                 } catch (_: Exception) {}
@@ -169,17 +162,6 @@ class MainViewModel : ViewModel() {
                 onResult(reply)
             } catch (e: Exception) {
                 onResult("回复失败: ${e.message}")
-            }
-        }
-    }
-
-    fun loadInteractiveHistory(method: FortuneMethod, onResult: (List<InteractiveHistoryRecord>) -> Unit) {
-        viewModelScope.launch {
-            try {
-                val history = SupabaseClient.loadInteractiveHistory(method)
-                onResult(history)
-            } catch (_: Exception) {
-                onResult(emptyList())
             }
         }
     }
