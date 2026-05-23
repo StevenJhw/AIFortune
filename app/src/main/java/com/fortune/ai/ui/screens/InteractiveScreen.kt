@@ -1,5 +1,6 @@
 package com.fortune.ai.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -12,7 +13,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.fortune.ai.data.remote.InteractiveHistoryRecord
+import com.fortune.ai.data.remote.SupabaseClient
 import com.fortune.ai.data.model.FortuneMethod
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -21,11 +25,23 @@ fun InteractiveScreen(
     method: FortuneMethod,
     onBack: () -> Unit,
     onSubmit: (question: String, extra: String) -> Unit,
-    result: String?
+    result: String?,
+    onReset: () -> Unit
 ) {
     var question by remember { mutableStateOf("") }
     var extra by remember { mutableStateOf("") }
     var isSubmitted by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
+    var history by remember { mutableStateOf<List<InteractiveHistoryRecord>>(emptyList()) }
+    val scope = rememberCoroutineScope()
+
+    LaunchedEffect(method) {
+        try {
+            history = SupabaseClient.loadInteractiveHistory(method)
+        } catch (_: Exception) {}
+    }
+
+    BackHandler { onBack() }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -34,64 +50,134 @@ fun InteractiveScreen(
                 IconButton(onClick = onBack) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                 }
+            },
+            actions = {
+                if (history.isNotEmpty()) {
+                    TextButton(onClick = { showHistory = !showHistory }) {
+                        Text(if (showHistory) "新占卜" else "历史(${history.size})")
+                    }
+                }
             }
         )
 
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            // Question input
-            OutlinedTextField(
-                value = question,
-                onValueChange = { question = it },
-                label = { Text("你想问什么？") },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2
-            )
+        if (showHistory) {
+            HistoryList(history)
+        } else {
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                // Question input
+                OutlinedTextField(
+                    value = question,
+                    onValueChange = { question = it },
+                    label = { Text("你想问什么？") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    enabled = !isSubmitted
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            // Method-specific interaction
-            when (method) {
-                FortuneMethod.TAROT -> TarotInteraction { extra = it }
-                FortuneMethod.LIUYAO -> LiuyaoInteraction { extra = it }
-                FortuneMethod.MEIHUA -> MeihuaInteraction { extra = it }
-                FortuneMethod.CEZI -> CeziInteraction { extra = it }
-                FortuneMethod.RUNES -> RunesInteraction { extra = it }
-                FortuneMethod.DICE -> DiceInteraction { extra = it }
-                FortuneMethod.PENDULUM -> {} // No extra needed
-                else -> {}
-            }
+                // Method-specific interaction
+                if (!isSubmitted) {
+                    when (method) {
+                        FortuneMethod.TAROT -> TarotInteraction { extra = it }
+                        FortuneMethod.LIUYAO -> LiuyaoInteraction { extra = it }
+                        FortuneMethod.MEIHUA -> MeihuaInteraction { extra = it }
+                        FortuneMethod.CEZI -> CeziInteraction { extra = it }
+                        FortuneMethod.RUNES -> RunesInteraction { extra = it }
+                        FortuneMethod.DICE -> DiceInteraction { extra = it }
+                        FortuneMethod.PENDULUM -> {}
+                        else -> {}
+                    }
+                }
 
-            Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-            if (!isSubmitted) {
-                Button(
-                    onClick = {
-                        isSubmitted = true
-                        onSubmit(question, extra)
-                    },
-                    enabled = question.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth().height(48.dp)
-                ) {
-                    Text("开始占卜")
+                if (!isSubmitted) {
+                    Button(
+                        onClick = {
+                            isSubmitted = true
+                            onSubmit(question, extra)
+                        },
+                        enabled = question.isNotBlank(),
+                        modifier = Modifier.fillMaxWidth().height(48.dp)
+                    ) {
+                        Text("开始占卜")
+                    }
+                }
+
+                // Result
+                if (isSubmitted) {
+                    Spacer(modifier = Modifier.height(24.dp))
+                    if (result == null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text("大师正在解读...")
+                        }
+                    } else {
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        ) {
+                            Text(
+                                result,
+                                fontSize = 15.sp,
+                                lineHeight = 24.sp,
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Reset button to ask again
+                        OutlinedButton(
+                            onClick = {
+                                isSubmitted = false
+                                question = ""
+                                extra = ""
+                                onReset()
+                            },
+                            modifier = Modifier.fillMaxWidth().height(48.dp)
+                        ) {
+                            Text("再算一卦")
+                        }
+                    }
                 }
             }
+        }
+    }
+}
 
-            // Result
-            if (isSubmitted) {
-                Spacer(modifier = Modifier.height(24.dp))
-                if (result == null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Text("大师正在解读...")
-                    }
-                } else {
-                    Text(result, fontSize = 15.sp, lineHeight = 24.sp)
+@Composable
+private fun HistoryList(history: List<InteractiveHistoryRecord>) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        history.forEach { record ->
+            Card {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(
+                        "问：${record.question}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        record.result,
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp,
+                        maxLines = 6
+                    )
                 }
             }
         }
@@ -113,7 +199,7 @@ private fun TarotInteraction(onResult: (String) -> Unit) {
 
     if (selectedCards.size < 3) {
         Button(onClick = {
-            val available = majorArcana - selectedCards.toSet()
+            val available = majorArcana - selectedCards.map { it.substringBefore(" (") }.toSet()
             val card = available.random()
             val reversed = Random.nextBoolean()
             val cardText = if (reversed) "$card (逆位)" else "$card (正位)"
@@ -138,7 +224,7 @@ private fun LiuyaoInteraction(onResult: (String) -> Unit) {
 
     if (yaos.size < 6) {
         Button(onClick = {
-            val coins = List(3) { Random.nextInt(2) } // 0=背 1=面
+            val coins = List(3) { Random.nextInt(2) }
             val sum = coins.sum()
             val yao = when (sum) {
                 0 -> "老阴 ✗✗"

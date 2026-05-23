@@ -24,12 +24,13 @@ fun ResultScreen(
     results: Map<FortuneMethod, FortuneResult>,
     overallSummary: String?,
     isGeneratingSummary: Boolean,
+    selectedTab: Int,
+    onTabChange: (Int) -> Unit,
     onMethodClick: (FortuneMethod) -> Unit,
     onInteractiveClick: (FortuneMethod) -> Unit,
     onSummaryClick: () -> Unit,
     onSettingsClick: () -> Unit = {}
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("中式", "西式", "问一卦")
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -51,7 +52,7 @@ fun ResultScreen(
             tabs.forEachIndexed { index, title ->
                 Tab(
                     selected = selectedTab == index,
-                    onClick = { selectedTab = index },
+                    onClick = { onTabChange(index) },
                     text = { Text(title) }
                 )
             }

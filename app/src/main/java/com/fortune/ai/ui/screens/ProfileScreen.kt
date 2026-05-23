@@ -18,13 +18,13 @@ import java.util.Calendar
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProfileScreen(onSubmit: (UserProfile) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var gender by remember { mutableStateOf("男") }
-    var birthDate by remember { mutableStateOf("") }
-    var birthTime by remember { mutableStateOf("") }
-    var birthCity by remember { mutableStateOf("") }
-    var bloodType by remember { mutableStateOf("不知道") }
+fun ProfileScreen(existingProfile: UserProfile?, onSubmit: (UserProfile) -> Unit) {
+    var name by remember { mutableStateOf(existingProfile?.name ?: "") }
+    var gender by remember { mutableStateOf(existingProfile?.gender ?: "男") }
+    var birthDate by remember { mutableStateOf(existingProfile?.birthDate ?: "") }
+    var birthTime by remember { mutableStateOf(existingProfile?.birthTime ?: "") }
+    var birthCity by remember { mutableStateOf(existingProfile?.birthCity ?: "") }
+    var bloodType by remember { mutableStateOf(existingProfile?.bloodType ?: "不知道") }
 
     var nameError by remember { mutableStateOf<String?>(null) }
     var dateError by remember { mutableStateOf<String?>(null) }
@@ -36,6 +36,8 @@ fun ProfileScreen(onSubmit: (UserProfile) -> Unit) {
 
     val context = LocalContext.current
     val calendar = Calendar.getInstance()
+
+    val isEdit = existingProfile != null
 
     if (showDatePicker) {
         LaunchedEffect(Unit) {
@@ -81,15 +83,17 @@ fun ProfileScreen(onSubmit: (UserProfile) -> Unit) {
         Spacer(modifier = Modifier.height(32.dp))
 
         Text(
-            "🔮 AI 算命",
+            if (isEdit) "修改基本信息" else "🔮 AI 算命",
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold
         )
-        Text(
-            "填写信息，诸位大师为你批命",
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-        )
+        if (!isEdit) {
+            Text(
+                "填写信息，诸位大师为你批命",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+        }
 
         Spacer(modifier = Modifier.height(32.dp))
 
@@ -122,7 +126,7 @@ fun ProfileScreen(onSubmit: (UserProfile) -> Unit) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Birth date - click to show picker
+        // Birth date
         Button(
             onClick = { showDatePicker = true },
             modifier = Modifier.fillMaxWidth(),
@@ -140,7 +144,7 @@ fun ProfileScreen(onSubmit: (UserProfile) -> Unit) {
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        // Birth time - click to show picker
+        // Birth time
         Button(
             onClick = { showTimePicker = true },
             modifier = Modifier.fillMaxWidth(),
@@ -226,7 +230,7 @@ fun ProfileScreen(onSubmit: (UserProfile) -> Unit) {
                 .fillMaxWidth()
                 .height(52.dp)
         ) {
-            Text("🔮 开始全算", fontSize = 18.sp)
+            Text(if (isEdit) "保存修改" else "🔮 开始全算", fontSize = 18.sp)
         }
 
         Spacer(modifier = Modifier.height(16.dp))

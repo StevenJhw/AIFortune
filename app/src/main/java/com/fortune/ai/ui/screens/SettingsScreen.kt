@@ -1,5 +1,6 @@
 package com.fortune.ai.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -14,10 +15,34 @@ import com.fortune.ai.data.api.ApiKeyStore
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(onBack: () -> Unit) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onEditProfile: () -> Unit,
+    onReRun: () -> Unit
+) {
     var apiKey by remember { mutableStateOf(ApiKeyStore.getApiKey()) }
     var showKey by remember { mutableStateOf(false) }
     var saved by remember { mutableStateOf(false) }
+    var showReRunConfirm by remember { mutableStateOf(false) }
+
+    BackHandler { onBack() }
+
+    if (showReRunConfirm) {
+        AlertDialog(
+            onDismissRequest = { showReRunConfirm = false },
+            title = { Text("重新全算") },
+            text = { Text("将重新调用AI算命，覆盖之前的结果。确定吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showReRunConfirm = false
+                    onReRun()
+                }) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showReRunConfirm = false }) { Text("取消") }
+            }
+        )
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -30,10 +55,35 @@ fun SettingsScreen(onBack: () -> Unit) {
         )
 
         Column(modifier = Modifier.padding(16.dp)) {
+            // Edit profile
+            OutlinedButton(
+                onClick = onEditProfile,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("修改基本信息")
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Re-run
+            OutlinedButton(
+                onClick = { showReRunConfirm = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("重新全算（重新调用AI）")
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            HorizontalDivider()
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // API Key
             Text("DeepSeek API Key", fontSize = 16.sp)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                "每个用户需要填写自己的 API Key 才能使用",
+                "填写自己的 Key 可以不消耗默认额度",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )

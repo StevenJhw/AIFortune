@@ -6,6 +6,8 @@ import com.fortune.ai.data.api.DeepSeekApi
 import com.fortune.ai.data.model.FortuneMethod
 import com.fortune.ai.data.model.FortuneResult
 import com.fortune.ai.data.model.UserProfile
+import com.fortune.ai.data.remote.InteractiveHistoryRecord
+import com.fortune.ai.data.remote.SupabaseClient
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,18 +29,71 @@ class MainViewModel : ViewModel() {
     private val _isGeneratingSummary = MutableStateFlow(false)
     val isGeneratingSummary: StateFlow<Boolean> = _isGeneratingSummary
 
+    private val _selectedTab = MutableStateFlow(0)
+    val selectedTab: StateFlow<Int> = _selectedTab
+
+    fun setSelectedTab(tab: Int) {
+        _selectedTab.value = tab
+    }
+
+    fun loadSavedData() {
+        viewModelScope.launch {
+            try {
+                val data = SupabaseClient.loadUserData()
+                if (data != null) {
+                    _profile.value = data.profile
+                    _results.value = data.results
+                    _overallSummary.value = data.summary
+                }
+            } catch (e: Exception) {
+                // Supabase unreachable, continue without data
+            }
+        }
+    }
+
+    fun hasSavedData(onResult: (Boolean) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val data = SupabaseClient.loadUserData()
+                if (data != null && data.results.isNotEmpty()) {
+                    _profile.value = data.profile
+                    _results.value = data.results
+                    _overallSummary.value = data.summary
+                    onResult(true)
+                } else {
+                    onResult(false)
+                }
+            } catch (e: Exception) {
+                onResult(false)
+            }
+        }
+    }
+
     fun setProfile(profile: UserProfile) {
         _profile.value = profile
+        startFullReading(profile)
+    }
+
+    fun updateProfile(profile: UserProfile) {
+        _profile.value = profile
+        viewModelScope.launch {
+            try {
+                SupabaseClient.saveUserData(profile, _results.value, _overallSummary.value)
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun reRunFullReading() {
+        val profile = _profile.value ?: return
+        _overallSummary.value = null
         startFullReading(profile)
     }
 
     private fun startFullReading(profile: UserProfile) {
         val methods = FortuneMethod.autoMethods()
 
-        // Init all as loading
         _results.value = methods.associateWith { FortuneResult(method = it, isLoading = true) }
 
-        // Launch all in parallel
         viewModelScope.launch {
             val deferreds = methods.map { method ->
                 async {
@@ -61,8 +116,12 @@ class MainViewModel : ViewModel() {
                 _results.value = _results.value.toMutableMap().apply { put(method, result) }
             }
 
-            // Generate overall summary after all complete
             generateOverallSummary(profile)
+
+            // Save to Supabase
+            try {
+                SupabaseClient.saveUserData(profile, _results.value, _overallSummary.value)
+            } catch (_: Exception) {}
         }
     }
 
@@ -73,7 +132,13 @@ class MainViewModel : ViewModel() {
                 val completedResults = _results.value
                     .filter { it.value.isComplete && it.value.detail.isNotBlank() }
                     .mapValues { "${it.value.summary}\n${it.value.detail}" }
-                _overallSummary.value = api.generateSummary(completedResults, profile)
+                val summary = api.generateSummary(completedResults, profile)
+                _overallSummary.value = summary
+
+                // Update Supabase with summary
+                try {
+                    SupabaseClient.saveUserData(profile, _results.value, summary)
+                } catch (_: Exception) {}
             } catch (e: Exception) {
                 _overallSummary.value = "总结生成失败: ${e.message}"
             }
@@ -86,9 +151,35 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 val result = api.divine(method, profile, question, extra)
+                // Save to Supabase
+                try {
+                    SupabaseClient.saveInteractiveRecord(method, question, result)
+                } catch (_: Exception) {}
                 onResult(result)
             } catch (e: Exception) {
                 onResult("占卜失败: ${e.message}")
+            }
+        }
+    }
+
+    fun chat(method: FortuneMethod, context: String, userQuestion: String, onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val reply = api.chat(method, context, userQuestion)
+                onResult(reply)
+            } catch (e: Exception) {
+                onResult("回复失败: ${e.message}")
+            }
+        }
+    }
+
+    fun loadInteractiveHistory(method: FortuneMethod, onResult: (List<InteractiveHistoryRecord>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val history = SupabaseClient.loadInteractiveHistory(method)
+                onResult(history)
+            } catch (_: Exception) {
+                onResult(emptyList())
             }
         }
     }

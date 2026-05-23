@@ -47,6 +47,43 @@ class DeepSeekApi {
         }
     }
 
+    suspend fun chat(method: FortuneMethod, context: String, userQuestion: String): String {
+        return withContext(Dispatchers.IO) {
+            val systemPrompt = buildSystemPrompt(method) + "\n\n以下是之前的解读结果，用户现在要追问：\n$context"
+            callApiWithMessages(listOf(
+                Message("system", systemPrompt),
+                Message("user", userQuestion)
+            ))
+        }
+    }
+
+    private fun callApiWithMessages(messages: List<Message>): String {
+        val requestBody = ChatRequest(
+            model = "deepseek-chat",
+            messages = messages,
+            temperature = 0.8,
+            maxTokens = 4096
+        )
+
+        val json = gson.toJson(requestBody)
+        val request = Request.Builder()
+            .url(baseUrl)
+            .addHeader("Authorization", "Bearer ${getApiKey()}")
+            .addHeader("Content-Type", "application/json")
+            .post(json.toRequestBody("application/json".toMediaType()))
+            .build()
+
+        val response = client.newCall(request).execute()
+        val body = response.body?.string() ?: throw Exception("Empty response")
+
+        if (!response.isSuccessful) {
+            throw Exception("API error ${response.code}: $body")
+        }
+
+        val chatResponse = gson.fromJson(body, ChatResponse::class.java)
+        return chatResponse.choices.firstOrNull()?.message?.content ?: "无法获取结果"
+    }
+
     private fun callApi(systemMessage: String, userMessage: String): String {
         val requestBody = ChatRequest(
             model = "deepseek-chat",
