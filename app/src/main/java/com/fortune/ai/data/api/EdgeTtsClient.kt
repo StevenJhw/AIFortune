@@ -245,8 +245,23 @@ class EdgeTtsClient {
         }
     }
 
+    private fun cleanTextForSpeech(raw: String): String {
+        return raw
+            .replace(Regex("[*#>|`~]"), "")
+            .replace(Regex("\\[([^]]*)]\\([^)]*\\)"), "$1") // [link](url) -> link
+            .replace(Regex("【([^】]*)】"), "$1，")            // 【标题】-> 标题，
+            .replace(Regex("^\\d+[.)]+\\s*", RegexOption.MULTILINE), "") // 1. 2) etc
+            .replace(Regex("^[-•]\\s+", RegexOption.MULTILINE), "")     // - bullet
+            .replace(Regex("---+"), "")
+            .replace(Regex("===+"), "")
+            .replace(Regex("[()（）{}\\[\\]「」『』]"), "")
+            .replace(Regex("\\s{2,}"), "\n")
+            .trim()
+    }
+
     private fun buildSsml(text: String): String {
-        val escaped = text
+        val clean = cleanTextForSpeech(text)
+        val escaped = clean
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
