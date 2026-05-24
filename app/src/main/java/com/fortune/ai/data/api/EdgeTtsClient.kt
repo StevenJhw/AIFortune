@@ -17,6 +17,7 @@ import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.UUID
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -29,6 +30,7 @@ class EdgeTtsClient {
         private const val CHROMIUM_FULL_VERSION = "143.0.3650.75"
         private const val SEC_MS_GEC_VERSION = "1-$CHROMIUM_FULL_VERSION"
         private const val WIN_EPOCH = 11644473600L
+        private const val SEGMENT_SIZE = 400
     }
 
     private val client = OkHttpClient.Builder()
@@ -40,20 +42,38 @@ class EdgeTtsClient {
     private var mediaPlayer: MediaPlayer? = null
     private var currentWebSocket: WebSocket? = null
     private var isPaused = false
+    private var isStopped = false
     private var clockSkewSeconds: Long = 0
+    private val pendingFiles = ConcurrentLinkedQueue<File>()
 
-    val isPlaying: Boolean get() = mediaPlayer?.isPlaying == true
+    val isPlaying: Boolean get() = mediaPlayer?.isPlaying == true || pendingFiles.isNotEmpty()
     val isPausedState: Boolean get() = isPaused
 
     suspend fun speak(text: String, cacheDir: File, onStateChange: () -> Unit) {
         stop()
+        isStopped = false
         Log.d(TAG, "TTS speak: text length=${text.length}")
-        val audioFile = withContext(Dispatchers.IO) {
-            synthesize(text, cacheDir)
+
+        val segments = splitIntoSegments(cleanTextForSpeech(text))
+        Log.d(TAG, "Split into ${segments.size} segments")
+
+        withContext(Dispatchers.IO) {
+            for ((index, segment) in segments.withIndex()) {
+                if (isStopped) break
+
+                val audioFile = synthesizeSegment(segment, cacheDir, index)
+                if (isStopped) break
+
+                if (index == 0) {
+                    withContext(Dispatchers.Main) {
+                        playAudio(audioFile, onStateChange, cacheDir)
+                        onStateChange()
+                    }
+                } else {
+                    pendingFiles.add(audioFile)
+                }
+            }
         }
-        Log.d(TAG, "TTS synthesized: file size=${audioFile.length()} bytes")
-        playAudio(audioFile, onStateChange)
-        Log.d(TAG, "TTS playback started")
     }
 
     fun pause() {
@@ -75,6 +95,7 @@ class EdgeTtsClient {
     }
 
     fun stop() {
+        isStopped = true
         currentWebSocket?.cancel()
         currentWebSocket = null
         mediaPlayer?.apply {
@@ -85,9 +106,10 @@ class EdgeTtsClient {
         }
         mediaPlayer = null
         isPaused = false
+        pendingFiles.clear()
     }
 
-    private fun playAudio(file: File, onStateChange: () -> Unit) {
+    private fun playAudio(file: File, onStateChange: () -> Unit, cacheDir: File) {
         mediaPlayer = MediaPlayer().apply {
             setAudioAttributes(
                 AudioAttributes.Builder()
@@ -98,42 +120,67 @@ class EdgeTtsClient {
             setDataSource(file.absolutePath)
             prepare()
             setOnCompletionListener {
-                isPaused = false
-                onStateChange()
+                file.delete()
+                playNext(onStateChange, cacheDir)
             }
             start()
         }
         isPaused = false
-        onStateChange()
     }
 
-    private fun generateSecMsGec(): String {
-        // Match Python edge-tts exactly:
-        // ticks = unix_timestamp + WIN_EPOCH
-        // ticks -= ticks % 300 (round down to 5 minutes)
-        // ticks *= 1e9 / 100 (convert to 100-nanosecond intervals)
-        // hash = SHA256(f"{ticks:.0f}{TRUSTED_CLIENT_TOKEN}").upper()
-        val unixTimestamp = System.currentTimeMillis() / 1000L + clockSkewSeconds
-        var ticks = unixTimestamp + WIN_EPOCH
-        ticks -= ticks % 300
-        val windowsTicks = ticks * 10_000_000L // 1e9 / 100 = 1e7
-        val strToHash = "$windowsTicks$TRUSTED_CLIENT_TOKEN"
-        Log.d(TAG, "GEC input: $strToHash")
-        val digest = MessageDigest.getInstance("SHA-256")
-        val hashBytes = digest.digest(strToHash.toByteArray(Charsets.US_ASCII))
-        return hashBytes.joinToString("") { "%02X".format(it) }
+    private fun playNext(onStateChange: () -> Unit, cacheDir: File) {
+        val nextFile = pendingFiles.poll()
+        if (nextFile != null && !isStopped) {
+            mediaPlayer?.release()
+            playAudio(nextFile, onStateChange, cacheDir)
+        } else {
+            mediaPlayer?.release()
+            mediaPlayer = null
+            isPaused = false
+            onStateChange()
+        }
     }
 
-    private fun generateMuid(): String {
-        val bytes = ByteArray(16)
-        SecureRandom().nextBytes(bytes)
-        return bytes.joinToString("") { "%02X".format(it) }
+    private fun splitIntoSegments(text: String): List<String> {
+        if (text.length <= SEGMENT_SIZE) return listOf(text)
+
+        val segments = mutableListOf<String>()
+        var remaining = text
+
+        while (remaining.isNotEmpty()) {
+            if (remaining.length <= SEGMENT_SIZE) {
+                segments.add(remaining)
+                break
+            }
+            var cutAt = remaining.lastIndexOf('。', SEGMENT_SIZE)
+            if (cutAt < SEGMENT_SIZE / 2) cutAt = remaining.lastIndexOf('，', SEGMENT_SIZE)
+            if (cutAt < SEGMENT_SIZE / 2) cutAt = remaining.lastIndexOf('\n', SEGMENT_SIZE)
+            if (cutAt < SEGMENT_SIZE / 2) cutAt = SEGMENT_SIZE
+
+            segments.add(remaining.substring(0, cutAt + 1))
+            remaining = remaining.substring(cutAt + 1).trimStart()
+        }
+        return segments
     }
 
-    private suspend fun synthesize(text: String, cacheDir: File): File {
+    private fun cleanTextForSpeech(raw: String): String {
+        return raw
+            .replace(Regex("[*#>|`~]"), "")
+            .replace(Regex("\\[([^]]*)]\\([^)]*\\)"), "$1")
+            .replace(Regex("【([^】]*)】"), "$1，")
+            .replace(Regex("^\\d+[.)]+\\s*", RegexOption.MULTILINE), "")
+            .replace(Regex("^[-•]\\s+", RegexOption.MULTILINE), "")
+            .replace(Regex("---+"), "")
+            .replace(Regex("===+"), "")
+            .replace(Regex("[()（）{}\\[\\]「」『』]"), "")
+            .replace(Regex("\\s{2,}"), "\n")
+            .trim()
+    }
+
+    private suspend fun synthesizeSegment(text: String, cacheDir: File, index: Int): File {
         val connectionId = UUID.randomUUID().toString().replace("-", "")
         val requestId = UUID.randomUUID().toString().replace("-", "")
-        val audioFile = File(cacheDir, "tts_$requestId.mp3")
+        val audioFile = File(cacheDir, "tts_${requestId}_$index.mp3")
 
         val secMsGec = generateSecMsGec()
         val muid = generateMuid()
@@ -144,7 +191,7 @@ class EdgeTtsClient {
             "&Sec-MS-GEC=$secMsGec" +
             "&Sec-MS-GEC-Version=$SEC_MS_GEC_VERSION"
 
-        Log.d(TAG, "Connecting: Sec-MS-GEC=$secMsGec, Version=$SEC_MS_GEC_VERSION")
+        if (index == 0) Log.d(TAG, "Connecting segment $index (${text.length} chars)")
 
         val request = Request.Builder()
             .url(url)
@@ -163,8 +210,6 @@ class EdgeTtsClient {
 
             val ws = client.newWebSocket(request, object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    Log.d(TAG, "WebSocket connected")
-
                     val configMessage = "X-Timestamp:${getTimestamp()}\r\n" +
                         "Content-Type:application/json; charset=utf-8\r\n" +
                         "Path:speech.config\r\n\r\n" +
@@ -185,8 +230,7 @@ class EdgeTtsClient {
                     if (data.size > 2) {
                         val headerLen = (data[0].toInt() and 0xFF shl 8) or (data[1].toInt() and 0xFF)
                         if (data.size > headerLen + 2) {
-                            val audioData = data.copyOfRange(headerLen + 2, data.size)
-                            audioBytes.add(audioData)
+                            audioBytes.add(data.copyOfRange(headerLen + 2, data.size))
                             audioStarted = true
                         }
                     }
@@ -194,79 +238,54 @@ class EdgeTtsClient {
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
                     if (text.contains("Path:turn.end")) {
-                        Log.d(TAG, "turn.end received, audio chunks: ${audioBytes.size}")
                         webSocket.close(1000, "done")
                         try {
                             FileOutputStream(audioFile).use { fos ->
                                 audioBytes.forEach { fos.write(it) }
                             }
-                            if (continuation.isActive) {
-                                continuation.resume(audioFile)
-                            }
+                            if (continuation.isActive) continuation.resume(audioFile)
                         } catch (e: Exception) {
-                            if (continuation.isActive) {
-                                continuation.resumeWithException(e)
-                            }
+                            if (continuation.isActive) continuation.resumeWithException(e)
                         }
                     }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    Log.e(TAG, "WebSocket failure: code=${response?.code} msg=${t.message}")
-                    // Clock skew correction: if 403, try to adjust from server Date header
+                    Log.e(TAG, "Segment $index failure: code=${response?.code}")
                     if (response?.code == 403) {
                         val serverDate = response.header("Date")
                         if (serverDate != null) {
                             try {
                                 val sdf = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss z", java.util.Locale.US)
                                 val serverTime = sdf.parse(serverDate)?.time?.div(1000) ?: 0L
-                                val localTime = System.currentTimeMillis() / 1000L
-                                clockSkewSeconds = serverTime - localTime
-                                Log.d(TAG, "Clock skew adjusted: ${clockSkewSeconds}s")
+                                clockSkewSeconds = serverTime - System.currentTimeMillis() / 1000L
+                                Log.d(TAG, "Clock skew: ${clockSkewSeconds}s")
                             } catch (_: Exception) {}
                         }
                     }
                     if (continuation.isActive) {
-                        continuation.resumeWithException(Exception("TTS连接失败(${response?.code}): ${t.message}"))
+                        continuation.resumeWithException(Exception("TTS失败(${response?.code})"))
                     }
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                     if (!audioStarted && continuation.isActive) {
-                        continuation.resumeWithException(Exception("TTS未返回音频"))
+                        continuation.resumeWithException(Exception("TTS无音频"))
                     }
                 }
             })
 
             currentWebSocket = ws
-            continuation.invokeOnCancellation {
-                ws.cancel()
-            }
+            continuation.invokeOnCancellation { ws.cancel() }
         }
     }
 
-    private fun cleanTextForSpeech(raw: String): String {
-        return raw
-            .replace(Regex("[*#>|`~]"), "")
-            .replace(Regex("\\[([^]]*)]\\([^)]*\\)"), "$1") // [link](url) -> link
-            .replace(Regex("【([^】]*)】"), "$1，")            // 【标题】-> 标题，
-            .replace(Regex("^\\d+[.)]+\\s*", RegexOption.MULTILINE), "") // 1. 2) etc
-            .replace(Regex("^[-•]\\s+", RegexOption.MULTILINE), "")     // - bullet
-            .replace(Regex("---+"), "")
-            .replace(Regex("===+"), "")
-            .replace(Regex("[()（）{}\\[\\]「」『』]"), "")
-            .replace(Regex("\\s{2,}"), "\n")
-            .trim()
-    }
-
     private fun buildSsml(text: String): String {
-        val clean = cleanTextForSpeech(text)
-        val escaped = clean
+        val escaped = text
             .replace("&", "&amp;")
             .replace("<", "&lt;")
             .replace(">", "&gt;")
             .replace("\"", "&quot;")
-            .take(3000)
 
         return """<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>
 <voice name='zh-CN-XiaoxiaoNeural'>
@@ -275,6 +294,23 @@ $escaped
 </prosody>
 </voice>
 </speak>"""
+    }
+
+    private fun generateSecMsGec(): String {
+        val unixTimestamp = System.currentTimeMillis() / 1000L + clockSkewSeconds
+        var ticks = unixTimestamp + WIN_EPOCH
+        ticks -= ticks % 300
+        val windowsTicks = ticks * 10_000_000L
+        val strToHash = "$windowsTicks$TRUSTED_CLIENT_TOKEN"
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hashBytes = digest.digest(strToHash.toByteArray(Charsets.US_ASCII))
+        return hashBytes.joinToString("") { "%02X".format(it) }
+    }
+
+    private fun generateMuid(): String {
+        val bytes = ByteArray(16)
+        SecureRandom().nextBytes(bytes)
+        return bytes.joinToString("") { "%02X".format(it) }
     }
 
     private fun getTimestamp(): String {
