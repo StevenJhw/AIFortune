@@ -6,16 +6,18 @@ import com.fortune.ai.data.api.DeepSeekApi
 import com.fortune.ai.data.model.FortuneMethod
 import com.fortune.ai.data.model.FortuneResult
 import com.fortune.ai.data.model.UserProfile
-import com.fortune.ai.data.remote.InteractiveHistoryRecord
 import com.fortune.ai.data.remote.SupabaseClient
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 class MainViewModel : ViewModel() {
 
     private val api = DeepSeekApi()
+    private val apiSemaphore = Semaphore(5)
 
     private val _profile = MutableStateFlow<UserProfile?>(null)
     val profile: StateFlow<UserProfile?> = _profile
@@ -90,16 +92,18 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             val deferreds = methods.map { method ->
                 async {
-                    try {
-                        val result = api.divine(method, profile)
-                        val parts = result.split("---")
-                        val summary = parts.getOrElse(0) { "" }.trim()
-                        val plainSummary = if (parts.size >= 3) parts[1].trim() else ""
-                        val detail = if (parts.size >= 3) parts.drop(2).joinToString("---").trim()
-                                     else parts.getOrElse(1) { result }.trim()
-                        method to FortuneResult(method, summary, plainSummary, detail, isLoading = false, isComplete = true)
-                    } catch (e: Exception) {
-                        method to FortuneResult(method, "算命失败: ${e.message}", "", "", isLoading = false, isComplete = true)
+                    apiSemaphore.withPermit {
+                        try {
+                            val result = api.divine(method, profile)
+                            val parts = result.split("---")
+                            val summary = parts.getOrElse(0) { "" }.trim()
+                            val plainSummary = if (parts.size >= 3) parts[1].trim() else ""
+                            val detail = if (parts.size >= 3) parts.drop(2).joinToString("---").trim()
+                                         else parts.getOrElse(1) { result }.trim()
+                            method to FortuneResult(method, summary, plainSummary, detail, isLoading = false, isComplete = true)
+                        } catch (e: Exception) {
+                            method to FortuneResult(method, "算命失败: ${e.message}", "", "", isLoading = false, isComplete = true)
+                        }
                     }
                 }
             }
@@ -109,35 +113,30 @@ class MainViewModel : ViewModel() {
                 _results.value = _results.value.toMutableMap().apply { put(method, result) }
             }
 
-            generateOverallSummary(profile)
-
             try {
-                SupabaseClient.saveUserData(profile, _results.value, _overallSummary.value)
+                SupabaseClient.saveUserData(profile, _results.value, null)
             } catch (_: Exception) {}
+
+            generateOverallSummary(profile)
         }
     }
 
-    private fun generateOverallSummary(profile: UserProfile) {
-        viewModelScope.launch {
-            _isGeneratingSummary.value = true
-            try {
-                val completedResults = _results.value
-                    .filter { it.value.isComplete && it.value.detail.isNotBlank() }
-                    .mapValues { "${it.value.summary}\n${it.value.detail}" }
-                val summary = api.generateSummary(completedResults, profile)
-                _overallSummary.value = summary
+    private suspend fun generateOverallSummary(profile: UserProfile) {
+        _isGeneratingSummary.value = true
+        try {
+            val completedResults = _results.value
+                .filter { it.value.isComplete && it.value.detail.isNotBlank() }
+                .mapValues { "${it.value.summary}\n${it.value.detail}" }
+            val summary = api.generateSummary(completedResults, profile)
+            _overallSummary.value = summary
 
-                val profile = _profile.value
-                if (profile != null) {
-                    try {
-                        SupabaseClient.saveUserData(profile, _results.value, summary)
-                    } catch (_: Exception) {}
-                }
-            } catch (e: Exception) {
-                _overallSummary.value = "总结生成失败: ${e.message}"
-            }
-            _isGeneratingSummary.value = false
+            try {
+                SupabaseClient.saveUserData(profile, _results.value, summary)
+            } catch (_: Exception) {}
+        } catch (e: Exception) {
+            _overallSummary.value = "总结生成失败: ${e.message}"
         }
+        _isGeneratingSummary.value = false
     }
 
     fun divineInteractive(method: FortuneMethod, question: String, extra: String, onResult: (String) -> Unit) {

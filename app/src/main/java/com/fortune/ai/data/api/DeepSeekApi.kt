@@ -6,18 +6,22 @@ import com.fortune.ai.data.model.UserProfile
 import com.google.gson.Gson
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.time.LocalDate
 import java.util.concurrent.TimeUnit
 
 class DeepSeekApi {
 
     private val client = OkHttpClient.Builder()
+        .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
         .connectTimeout(60, TimeUnit.SECONDS)
         .readTimeout(180, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val gson = Gson()
@@ -63,22 +67,7 @@ class DeepSeekApi {
         )
 
         val json = gson.toJson(requestBody)
-        val request = Request.Builder()
-            .url(baseUrl)
-            .addHeader("Authorization", "Bearer ${getApiKey()}")
-            .addHeader("Content-Type", "application/json")
-            .post(json.toRequestBody("application/json".toMediaType()))
-            .build()
-
-        val response = client.newCall(request).execute()
-        val body = response.body?.string() ?: throw Exception("Empty response")
-
-        if (!response.isSuccessful) {
-            throw Exception("API error ${response.code}: $body")
-        }
-
-        val chatResponse = gson.fromJson(body, ChatResponse::class.java)
-        return chatResponse.choices.firstOrNull()?.message?.content ?: "无法获取结果"
+        return executeWithRetry(json)
     }
 
     private fun callApi(systemMessage: String, userMessage: String): String {
@@ -93,23 +82,52 @@ class DeepSeekApi {
         )
 
         val json = gson.toJson(requestBody)
-        val request = Request.Builder()
-            .url(baseUrl)
-            .addHeader("Authorization", "Bearer ${getApiKey()}")
-            .addHeader("Content-Type", "application/json")
-            .post(json.toRequestBody("application/json".toMediaType()))
-            .build()
-
-        val response = client.newCall(request).execute()
-        val body = response.body?.string() ?: throw Exception("Empty response")
-
-        if (!response.isSuccessful) {
-            throw Exception("API error ${response.code}: $body")
-        }
-
-        val chatResponse = gson.fromJson(body, ChatResponse::class.java)
-        return chatResponse.choices.firstOrNull()?.message?.content ?: "无法获取结果"
+        return executeWithRetry(json)
     }
+
+    private fun executeWithRetry(json: String, maxRetries: Int = 3): String {
+        var lastException: Exception? = null
+        repeat(maxRetries) { attempt ->
+            try {
+                val request = Request.Builder()
+                    .url(baseUrl)
+                    .addHeader("Authorization", "Bearer ${getApiKey()}")
+                    .addHeader("Content-Type", "application/json")
+                    .post(json.toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    val body = response.body?.string() ?: throw Exception("Empty response")
+
+                    if (response.code == 429 || response.code >= 500) {
+                        throw RetryableException("API error ${response.code}: $body")
+                    }
+
+                    if (!response.isSuccessful) {
+                        throw Exception("API error ${response.code}: $body")
+                    }
+
+                    val chatResponse = gson.fromJson(body, ChatResponse::class.java)
+                    return chatResponse.choices.firstOrNull()?.message?.content ?: "无法获取结果"
+                }
+            } catch (e: RetryableException) {
+                lastException = e
+                if (attempt < maxRetries - 1) {
+                    Thread.sleep((attempt + 1) * 2000L)
+                }
+            } catch (e: java.io.IOException) {
+                lastException = e
+                if (attempt < maxRetries - 1) {
+                    Thread.sleep((attempt + 1) * 2000L)
+                }
+            } catch (e: Exception) {
+                throw e
+            }
+        }
+        throw lastException ?: Exception("请求失败")
+    }
+
+    private class RetryableException(message: String) : Exception(message)
 
     private fun buildSystemPrompt(method: FortuneMethod): String {
         return when (method) {
@@ -224,6 +242,9 @@ Kin编号、太阳图腾（Solar Seal）、银河音调（Galactic Tone）、
     }
 
     private fun buildUserPrompt(method: FortuneMethod, profile: UserProfile, question: String?, extra: String?): String {
+        val today = LocalDate.now()
+        val currentYear = today.year
+        val currentMonth = today.monthValue
         val baseInfo = """
 以下是求测者的基本信息：
 - 姓名：${profile.name}
@@ -232,6 +253,7 @@ Kin编号、太阳图腾（Solar Seal）、银河音调（Galactic Tone）、
 - 出生时间：${profile.birthTime}
 - 出生城市：${profile.birthCity}
 - 血型：${profile.bloodType}
+- 当前日期：${today}（请基于此日期分析运势）
 """.trimIndent()
 
         val taskPrompt = when (method) {
@@ -243,9 +265,10 @@ $baseInfo
 2. 分析日主强弱和喜用神
 3. 解读十神格局
 4. 分析五行分布和缺失
-5. 推断大运流年走势（重点分析近5年）
-6. 给出事业、财运、婚姻、健康方面的总体判断
-7. 给出趋吉避凶的建议"""
+5. 推断大运流年走势（重点分析${currentYear}年及未来3年）
+6. 详细分析${currentYear}年${currentMonth}月起未来半年的月运
+7. 给出事业、财运、婚姻、健康方面的总体判断
+8. 给出趋吉避凶的建议"""
 
             FortuneMethod.ZIWEI -> """
 $baseInfo
@@ -254,8 +277,9 @@ $baseInfo
 1. 确定命宫所在宫位和主星
 2. 逐一分析：命宫、兄弟宫、夫妻宫、子女宫、财帛宫、疾厄宫、迁移宫、交友宫、事业宫、田宅宫、福德宫、父母宫
 3. 重点解读命宫、事业宫、财帛宫、夫妻宫的星曜组合
-4. 分析当前大限和流年运势
-5. 给出人生建议"""
+4. 分析当前大限和${currentYear}年流年运势
+5. 分析${currentYear}年${currentMonth}月流月运势
+6. 给出人生建议"""
 
             FortuneMethod.NAME_STUDY -> """
 $baseInfo
@@ -271,13 +295,14 @@ $baseInfo
             FortuneMethod.ZODIAC -> """
 $baseInfo
 
-请分析此人今年（2024年）的生肖运势：
+请分析此人${currentYear}年（当前为${currentMonth}月）的生肖运势：
 1. 确定其生肖和五行属性
 2. 分析与今年太岁的关系（犯太岁、刑太岁、冲太岁等）
 3. 分项解读：事业运、财运、感情运、健康运、学业运
-4. 每月运势概览（标注特别好和特别需注意的月份）
-5. 给出开运建议（颜色、方位、数字等）
-6. 提示需要注意的月份和事项"""
+4. 重点分析当前月份（${currentMonth}月）及未来3个月的运势
+5. 每月运势概览（标注特别好和特别需注意的月份）
+6. 给出开运建议（颜色、方位、数字等）
+7. 提示近期需要注意的事项"""
 
             FortuneMethod.QIMEN -> """
 $baseInfo
@@ -299,7 +324,8 @@ $baseInfo
 4. 解读月亮星座的情感模式和内在需求
 5. 解读上升星座的外在表现和人生方向
 6. 分析三者之间的配合或冲突
-7. 给出当前星象对此人的影响"""
+7. 分析${currentYear}年${currentMonth}月当前行星过境对此人的具体影响
+8. 给出未来3个月的星象提醒"""
 
             FortuneMethod.NATAL_CHART -> """
 $baseInfo

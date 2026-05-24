@@ -4,29 +4,59 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.fortune.ai.data.model.FortuneMethod
 import com.fortune.ai.data.model.FortuneResult
 import com.fortune.ai.data.model.UserProfile
 import com.fortune.ai.data.remote.SupabaseClient
+import com.fortune.ai.ui.components.FortuneTextContent
+import com.fortune.ai.ui.components.TtsPlayerBar
 import com.fortune.ai.ui.screens.*
 import com.fortune.ai.ui.theme.AiFortuneTheme
+import com.fortune.ai.ui.theme.MysticBlack
+import com.fortune.ai.ui.theme.MysticDarkPurple
+import com.fortune.ai.ui.theme.MysticGold
+import com.fortune.ai.ui.theme.TextPrimary
+import com.fortune.ai.ui.theme.TextSecondary
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         SupabaseClient.init(this)
         setContent {
             AiFortuneTheme {
@@ -51,14 +81,12 @@ fun AiFortuneApp(viewModel: MainViewModel = viewModel()) {
     var pendingProfile by remember { mutableStateOf<UserProfile?>(null) }
     var showUpdateConfirm by remember { mutableStateOf(false) }
 
-    // Load saved data on first launch
     LaunchedEffect(Unit) {
         viewModel.hasSavedData { hasData ->
             currentScreen = if (hasData) Screen.Results else Screen.Profile
         }
     }
 
-    // Handle system back button / swipe back
     BackHandler(enabled = currentScreen != Screen.Results && currentScreen != Screen.Profile && currentScreen != Screen.Loading) {
         currentScreen = when (currentScreen) {
             Screen.Detail -> Screen.Results
@@ -71,39 +99,44 @@ fun AiFortuneApp(viewModel: MainViewModel = viewModel()) {
         }
     }
 
-    // Confirm dialog when updating profile
     if (showUpdateConfirm && pendingProfile != null) {
         AlertDialog(
             onDismissRequest = {
                 showUpdateConfirm = false
                 pendingProfile = null
             },
-            title = { Text("修改基本信息") },
-            text = { Text("修改信息后将重新算命，之前的算命结果和问卦历史都会被清除。确定吗？") },
+            title = { Text("修改基本信息", color = MysticGold) },
+            text = { Text("修改信息后将重新算命，之前的算命结果和问卦历史都会被清除。确定吗？", color = TextPrimary) },
+            containerColor = MysticDarkPurple,
             confirmButton = {
                 TextButton(onClick = {
                     showUpdateConfirm = false
                     viewModel.updateProfile(pendingProfile!!)
                     pendingProfile = null
                     currentScreen = Screen.Results
-                }) { Text("确定") }
+                }) { Text("确定", color = MysticGold) }
             },
             dismissButton = {
                 TextButton(onClick = {
                     showUpdateConfirm = false
                     pendingProfile = null
-                }) { Text("取消") }
+                }) { Text("取消", color = TextPrimary) }
             }
         )
     }
 
     when (currentScreen) {
         Screen.Loading -> {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MysticBlack),
+                contentAlignment = Alignment.Center
+            ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator()
+                    CircularProgressIndicator(color = MysticGold)
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("加载中...")
+                    Text("加载中...", color = TextSecondary)
                 }
             }
         }
@@ -224,33 +257,34 @@ fun AiFortuneApp(viewModel: MainViewModel = viewModel()) {
 fun SummaryScreen(summary: String, onBack: () -> Unit) {
     BackHandler { onBack() }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MysticBlack)
+    ) {
         TopAppBar(
-            title = { Text("命运总评") },
+            title = { Text("命运总评", color = MysticGold, fontWeight = FontWeight.SemiBold) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = MysticGold)
                 }
-            }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MysticDarkPurple)
         )
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState())
-        ) {
-            Text(
-                "📊 综合各方大师意见",
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                summary,
-                fontSize = 15.sp,
-                lineHeight = 24.sp
-            )
+        SelectionContainer {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(bottom = 16.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                TtsPlayerBar(
+                    text = summary,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                )
+                FortuneTextContent(rawText = summary)
+            }
         }
     }
 }

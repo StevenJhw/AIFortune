@@ -1,14 +1,47 @@
 package com.fortune.ai.ui.screens
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -17,6 +50,13 @@ import androidx.compose.ui.unit.sp
 import com.fortune.ai.data.model.FortuneMethod
 import com.fortune.ai.data.model.FortuneResult
 import com.fortune.ai.data.remote.SupabaseClient
+import com.fortune.ai.ui.theme.MysticBlack
+import com.fortune.ai.ui.theme.MysticDarkPurple
+import com.fortune.ai.ui.theme.MysticGold
+import com.fortune.ai.ui.theme.MysticPurple
+import com.fortune.ai.ui.theme.TextPrimary
+import com.fortune.ai.ui.theme.TextSecondary
+import com.fortune.ai.ui.theme.TextTertiary
 import kotlinx.coroutines.launch
 
 data class ChatMessage(
@@ -65,36 +105,62 @@ fun ChatScreen(
         isLoading = false
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MysticBlack)
+    ) {
         TopAppBar(
-            title = { Text("追问 · ${method.displayName}") },
+            title = {
+                Text(
+                    "追问 · ${method.displayName}",
+                    color = MysticGold,
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    Icon(Icons.Default.ArrowBack, contentDescription = "返回", tint = MysticGold)
                 }
-            }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = MysticDarkPurple
+            )
         )
 
         if (isLoading) {
             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(color = MysticGold)
             }
         } else {
             LazyColumn(
-                modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
                 state = listState,
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                contentPadding = PaddingValues(vertical = 8.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+                contentPadding = PaddingValues(vertical = 12.dp)
             ) {
                 items(messages) { message ->
                     ChatBubble(message)
                 }
                 if (isWaiting) {
                     item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("大师思考中...", fontSize = 12.sp)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 4.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                color = MysticGold,
+                                strokeWidth = 1.5.dp
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                "大师思考中...",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = TextTertiary
+                            )
                         }
                     }
                 }
@@ -104,19 +170,28 @@ fun ChatScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .background(MysticDarkPurple)
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text("继续追问...") },
+                placeholder = { Text("继续追问...", color = TextTertiary) },
                 modifier = Modifier.weight(1f),
                 enabled = !isWaiting && !isLoading,
                 singleLine = false,
-                maxLines = 3
+                maxLines = 3,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MysticGold,
+                    unfocusedBorderColor = MysticPurple,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    cursorColor = MysticGold
+                )
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(10.dp))
             Button(
                 onClick = {
                     val userMsg = inputText.trim()
@@ -126,7 +201,6 @@ fun ChatScreen(
                         isWaiting = true
 
                         scope.launch {
-                            // Save user message first, await completion
                             try {
                                 SupabaseClient.saveChatMessage(method, userMsg, isUser = true)
                             } catch (_: Exception) {}
@@ -137,7 +211,6 @@ fun ChatScreen(
                             messages = messages + ChatMessage(reply, isUser = false)
                             isWaiting = false
                             scope.launch {
-                                // Save AI reply, await completion
                                 try {
                                     SupabaseClient.saveChatMessage(method, reply, isUser = false)
                                 } catch (_: Exception) {}
@@ -146,9 +219,14 @@ fun ChatScreen(
                         }
                     }
                 },
-                enabled = inputText.isNotBlank() && !isWaiting && !isLoading
+                enabled = inputText.isNotBlank() && !isWaiting && !isLoading,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MysticGold,
+                    contentColor = MysticBlack
+                ),
+                shape = RoundedCornerShape(16.dp)
             ) {
-                Text("发送")
+                Text("发送", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -157,10 +235,7 @@ fun ChatScreen(
 @Composable
 private fun ChatBubble(message: ChatMessage) {
     val alignment = if (message.isUser) Alignment.End else Alignment.Start
-    val containerColor = if (message.isUser)
-        MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
-    else
-        MaterialTheme.colorScheme.surfaceVariant
+    val containerColor = if (message.isUser) MysticPurple else MysticDarkPurple
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -168,21 +243,29 @@ private fun ChatBubble(message: ChatMessage) {
     ) {
         Text(
             if (message.isUser) "你" else "大师",
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            style = MaterialTheme.typography.labelSmall,
+            color = if (message.isUser) TextTertiary else MysticGold.copy(alpha = 0.7f),
+            fontWeight = FontWeight.Bold
         )
-        Spacer(modifier = Modifier.height(2.dp))
         Card(
             colors = CardDefaults.cardColors(containerColor = containerColor),
+            shape = RoundedCornerShape(
+                topStart = if (message.isUser) 16.dp else 4.dp,
+                topEnd = if (message.isUser) 4.dp else 16.dp,
+                bottomStart = 16.dp,
+                bottomEnd = 16.dp
+            ),
             modifier = Modifier.widthIn(max = 300.dp)
         ) {
-            Text(
-                message.content,
-                modifier = Modifier.padding(12.dp),
-                fontSize = 14.sp,
-                lineHeight = 22.sp
-            )
+            SelectionContainer {
+                Text(
+                    message.content,
+                    modifier = Modifier.padding(14.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = TextPrimary,
+                    lineHeight = 22.sp
+                )
+            }
         }
     }
 }
